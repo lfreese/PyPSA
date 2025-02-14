@@ -490,6 +490,7 @@ def post_processing(n: Network) -> None:
     def sign(c: str) -> int:
         return n.static(c).sign if "sign" in n.static(c) else -1  # sign for 'Link'
 
+    breakpoint()
     n.buses_t.p = (
         pd.concat(
             [
