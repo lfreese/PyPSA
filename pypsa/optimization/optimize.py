@@ -79,6 +79,7 @@ def define_objective(n: Network, sns: pd.Index) -> None:
     """
     Defines and writes out the objective function.
     """
+    ##### ORIGINAL CASE ######
     m = n.model
     objective = []
     is_quadratic = False
@@ -209,6 +210,39 @@ def define_objective(n: Network, sns: pd.Index) -> None:
     m.objective = sum(objective) if is_quadratic else merge(objective)
 
 
+def define_objective_co2(n: Network, sns: pd.Index) -> None:
+    """
+    Defines and writes out the objective function.
+    """
+    ##### CO2 CASE ######
+    m = n.model
+    # breakpoint()
+    weightings = n.snapshot_weightings.loc[n.snapshots]
+
+    emissions = n.carriers.co2_emissions.fillna(0)[lambda ds: ds != 0]
+    gens_em = n.generators.query("carrier in @emissions.index")
+
+    efficiency = get_as_dense(
+        n,
+        "Generator",
+        "efficiency",
+        inds=gens_em.index,
+    )  # mw_elect/mw_th
+
+    planning_horizon = sns.unique("period")
+
+    em_pu = gens_em.carrier.map(emissions) / efficiency  # tonnes_co2/mw_electrical
+    em_pu = (
+        em_pu.multiply(weightings.generators, axis=0).loc[planning_horizon].fillna(0)
+    )
+
+    p_em = n.model["Generator-p"].loc[:, gens_em.index]  # .sel(period=planning_horizon)
+
+    objective = (p_em * em_pu).sum()
+
+    m.objective = objective.sum()
+
+
 def create_model(
     n: Network,
     snapshots: Sequence | None = None,
@@ -323,7 +357,7 @@ def create_model(
     define_nominal_constraints_per_bus_carrier(n, sns)
     define_growth_limit(n, sns)
 
-    define_objective(n, sns)
+    define_objective_co2(n, sns)  # CO2 CASE
 
     return n.model
 
@@ -459,7 +493,7 @@ def post_processing(n: Network) -> None:
     n.buses_t.marginal_price.loc[sns] = n.buses_t.marginal_price.loc[sns].divide(
         weightings, axis=0
     )
-
+    # breakpoint()
     # load
     if len(n.loads):
         set_from_frame(n, "Load", "p", get_as_dense(n, "Load", "p_set", sns))
@@ -485,6 +519,37 @@ def post_processing(n: Network) -> None:
     def sign(c: str) -> int:
         return n.static(c).sign if "sign" in n.static(c) else -1  # sign for 'Link'
 
+    # if np.unique(sns.get_level_values(0)) > 2030:
+    # breakpoint()
+
+    # n.buses_t.loc[sns].p = (
+    #     pd.concat(
+    #         [
+    #             n.dynamic(c)[attr].mul(sign(c)).rename(columns=n.static(c)[group])
+    #             for c, attr, group in ca
+    #         ],
+    #         axis=1,
+    #     )
+    #     .T.groupby(level=0)
+    #     .sum()
+    #     .T.reindex(columns=n.buses.index, fill_value=0.0).loc[sns]#.loc[np.unique(sns.get_level_values(0))]
+    # )
+
+    # n.add(
+    #     pd.concat(
+    #         [
+    #             n.dynamic(c)[attr].mul(sign(c)).rename(columns=n.static(c)[group])
+    #             for c, attr, group in ca
+    #         ],
+    #         axis=1,
+    #     )
+    #     .T.groupby(level=0)
+    #     .sum()
+    #     .T.reindex(columns=n.buses.index)#, fill_value=0.0)
+    #  )
+
+    # n.buses_t.p =
+    # breakpoint()
     n.buses_t.p = (
         pd.concat(
             [
@@ -495,8 +560,8 @@ def post_processing(n: Network) -> None:
         )
         .T.groupby(level=0)
         .sum()
-        .T.reindex(columns=n.buses.index, fill_value=0.0)
-    )
+        .T.reindex(columns=n.buses.index)
+    )  # , fill_value=0.0)
 
     def v_ang_for_(sub: SubNetwork) -> pd.DataFrame:
         buses_i = sub.buses_o
