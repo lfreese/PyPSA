@@ -279,6 +279,10 @@ def create_model(
     n._linearized_uc = int(linearized_unit_commitment)
     n._multi_invest = int(multi_investment_periods)
     n.consistency_check()
+    opt_type = kwargs[
+        "opt_type"
+    ]  # had to pass through the opt_type to determine the optimization function
+    del kwargs["opt_type"]  # now remove so the kwargs are clean
 
     kwargs.setdefault("force_dim_names", True)
     n.model = Model(**kwargs)
@@ -357,7 +361,12 @@ def create_model(
     define_nominal_constraints_per_bus_carrier(n, sns)
     define_growth_limit(n, sns)
 
-    define_objective_co2(n, sns)  # CO2 CASE
+    if opt_type == "co2":
+        define_objective_co2(n, sns)  # CO2 CASE
+        logger.info("CO2 optimization.")
+    elif opt_type == "cost":
+        define_objective(n, sns)  # ORIGINAL CASE
+        logger.info("Cost optimization.")
 
     return n.model
 
@@ -493,7 +502,7 @@ def post_processing(n: Network) -> None:
     n.buses_t.marginal_price.loc[sns] = n.buses_t.marginal_price.loc[sns].divide(
         weightings, axis=0
     )
-    # breakpoint()
+
     # load
     if len(n.loads):
         set_from_frame(n, "Load", "p", get_as_dense(n, "Load", "p_set", sns))
@@ -520,7 +529,6 @@ def post_processing(n: Network) -> None:
         return n.static(c).sign if "sign" in n.static(c) else -1  # sign for 'Link'
 
     # if np.unique(sns.get_level_values(0)) > 2030:
-    # breakpoint()
 
     # n.buses_t.loc[sns].p = (
     #     pd.concat(
@@ -648,10 +656,13 @@ def optimize(
     """
 
     sns = as_index(n, snapshots, "snapshots", "snapshot")
+
     n._multi_invest = int(multi_investment_periods)
     n._linearized_uc = linearized_unit_commitment
+    model_kwargs["opt_type"] = kwargs["opt_type"]  # carry through the optimization type
 
     n.consistency_check()
+
     m = create_model(
         n,
         sns,
@@ -662,6 +673,9 @@ def optimize(
     )
     if extra_functionality:
         extra_functionality(n, sns)
+    del kwargs[
+        "opt_type"
+    ]  # remove the opt_type from the kwargs so it doesn't interfere with the solver
     status, condition = m.solve(solver_name=solver_name, **solver_options, **kwargs)
 
     if status == "ok":
@@ -731,6 +745,7 @@ class OptimizationAccessor:
             "optimal" or one of the codes listed in
             https://linopy.readthedocs.io/en/latest/generated/linopy.constants.TerminationCondition.html
         """
+
         n = self.n
         if extra_functionality:
             extra_functionality(n, n.snapshots)
